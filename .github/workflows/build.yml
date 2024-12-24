@@ -1,113 +1,50 @@
-name: Build
-
+name: DockerImage
 on:
-  workflow_dispatch:
   push:
     branches:
-      - master
-    paths-ignore:
-      - '**/*.md'
-      - '**/*.yml'
-      - '.gitignore'
-      - '.dockerignore'
-      - '.github/**'
-      - '.github/workflows/**'
-
-concurrency:
-  group: build
-  cancel-in-progress: false
-
+      - harbor-build
 jobs:
-  shellcheck:
-    name: Test
-    uses: ./.github/workflows/check.yml
-  build:
-    name: Build
-    needs: shellcheck
+  docker:
     runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      packages: write
-      contents: read
     steps:
-      -
-        name: Checkout
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      -
-        name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          context: git
-          images: |
-            ${{ secrets.DOCKERHUB_REPO }}
-            ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest,priority=100
-            type=raw,value=${{ vars.MAJOR }}.${{ vars.MINOR }}
-          labels: |
-            org.opencontainers.image.title=${{ vars.NAME }}
-        env:
-          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
-      - 
-        name: Set up Docker Buildx
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      -
-        name: Login into Docker Hub
+
+      - name: Login to Harbor
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      -
-        name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+          registry: harbor.k3s0.ujstor.com
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Install yq
+        run: |
+          sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq 
+          sudo chmod +x /usr/bin/yq
+
+      - name: Run docker tag sh and export var from config.yml
+        env:
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+        run: |
+          chmod +x ./docker_tag.sh
+          ./docker_tag.sh
+
+      - name: Export env variables 
+        uses: cardinalby/export-env-action@v2
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      -
-        name: Build Docker image
-        uses: docker/build-push-action@v6
+          envFile: '.env'
+
+      - name: Build and push
+        if: ${{ env.PUSH_TO_HARBOR == 'true' }}
+        uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          provenance: false
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          annotations: ${{ steps.meta.outputs.annotations }}
-          build-args: |
-            VERSION_ARG=${{ steps.meta.outputs.version }}
-      -
-        name: Create a release
-        uses: action-pack/github-release@v2
-        with:
-          tag: "v${{ steps.meta.outputs.version }}"
-          title: "v${{ steps.meta.outputs.version }}"
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-      -
-        name: Increment version variable
-        uses: action-pack/bump@v2
-        with:
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
-      -
-        name: Push to Gitlab mirror
-        uses: action-pack/gitlab-sync@v3
-        with:
-          url: ${{ secrets.GITLAB_URL }}
-          token: ${{ secrets.GITLAB_TOKEN }}
-          username: ${{ secrets.GITLAB_USERNAME }}
-      -
-        name: Send mail
-        uses: action-pack/send-mail@v1
-        with:
-          to: ${{secrets.MAILTO}}
-          from: Github Actions <${{secrets.MAILTO}}>
-          connection_url: ${{secrets.MAIL_CONNECTION}}
-          subject: Build of ${{ github.event.repository.name }} v${{ steps.meta.outputs.version }} completed
-          body: |
-              The build job of ${{ github.event.repository.name }} v${{ steps.meta.outputs.version }} was completed successfully! 
-              
-              See https://github.com/${{ github.repository }}/actions for more information.
+          tags: ${{ env.HARBOR_URL }}/${{ env.HARBOR_PROJECT }}/${{ env.HARBOR_REPO }}:${{ env.NEW_TAG }}

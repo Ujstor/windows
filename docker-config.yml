@@ -1,0 +1,6 @@
+docker:
+  HARBOR_URL: harbor.k3s0.ujstor.com
+  HARBOR_PROJECT: docker
+  HARBOR_REPO: k8s-windows
+  VERSION_PART: Patch # Patch, Minor, Major
+  PUSH_TO_HARBOR: true
